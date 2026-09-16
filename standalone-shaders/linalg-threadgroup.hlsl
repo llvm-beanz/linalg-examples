@@ -30,7 +30,7 @@ void main()
 {
     // Matrix type definitions for threadgroup scope
     using MatrixATy = Matrix<ComponentType::F16, M, K, MatrixUse::A, MatrixScope::ThreadGroup>;
-    using MatrixBTy = Matrix<ComponentType::F16, N, K, MatrixUse::B, MatrixScope::ThreadGroup>;
+    using MatrixBTy = Matrix<ComponentType::F16, K, N, MatrixUse::B, MatrixScope::ThreadGroup>;
     using MatrixResultTy = Matrix<ComponentType::F32, M, N, MatrixUse::Accumulator, MatrixScope::ThreadGroup>;
 
     MatrixATy a_matrix = MatrixATy::Load(MatrixA, 0, K * sizeof(half), MatrixLayout::RowMajor);
@@ -41,7 +41,7 @@ void main()
     MatrixResultTy c_existing = MatrixResultTy::Load(MatrixC, 0, N * sizeof(float), MatrixLayout::RowMajor);
     
     // Compute A*B
-    MatrixResultTy ab_result = MatrixResultTy::Multiply(a_matrix, b_matrix);
+    MatrixResultTy ab_result = Multiply<ComponentType::F32>(a_matrix, b_matrix);
     
     // Apply GEMM scaling element-wise: α*A*B + β*C
     for (uint i = 0; i < ab_result.Length(); i++) {

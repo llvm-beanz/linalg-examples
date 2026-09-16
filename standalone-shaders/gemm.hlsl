@@ -47,7 +47,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         
         if (aRow < M && aCol < K)
         {
-            tileA[groupThreadID.y][groupThreadID.x] = MatrixA[aRow * sizeof(float) * K + aCol];
+            tileA[groupThreadID.y][groupThreadID.x] = MatrixA[aRow * K + aCol];
         }
         else
         {
@@ -60,7 +60,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         
         if (bRow < K && bCol < N)
         {
-            tileB[groupThreadID.y][groupThreadID.x] = MatrixB[bRow * sizeof(float) * N + bCol];
+            tileB[groupThreadID.y][groupThreadID.x] = MatrixB[bRow * N + bCol];
         }
         else
         {
