@@ -14,6 +14,7 @@ the complete execution flow.
 ## Contents
 
 - [Build and run](#build-and-run)
+- [Train replacement parameters](#train-replacement-parameters)
 - [Network and resource layout](#1-start-with-the-network-equation)
 - [Preview runtime and shader compilation](#3-select-the-preview-d3d12-runtime)
 - [Device setup and dispatch](#5-create-a-device-that-can-run-the-shader)
@@ -50,12 +51,17 @@ You need:
 - CMake 3.24 or newer and Ninja
 - An x64 or ARM64 build environment
 
+Training replacement parameters also requires Python 3.9 or newer and NumPy.
+
 The main source files are:
 
 - [`sin-network.cpp`](sin-network.cpp): creates the D3D12 device and resources,
   dispatches the shader, and checks the result
 - [`sin-network.hlsl`](sin-network.hlsl): evaluates one network input per shader
   thread
+- [`train.py`](train.py): fits replacement network parameters and prints C++
+  initializers
+- [`requirements.txt`](requirements.txt): declares the training dependency
 - [`CMakeLists.txt`](CMakeLists.txt): downloads the preview packages, builds the
   host, and stages runtime files
 
@@ -79,6 +85,67 @@ cmake --build build/sin-network
 The post-build command stages the shader, `dx/linalg.h`, DXC DLLs, Agility SDK
 DLLs, and WARP DLLs beside the executable. A successful run reports
 approximately `0.00271` maximum error and `0.00120` RMS error.
+
+## Train replacement parameters
+
+The checked-in parameters were added with the original sample, without its
+training program. `train.py` provides a deterministic way to train a compatible
+replacement set; it does not reproduce the original output weights exactly.
+
+The network is linear in its output weights once the 16 hidden slopes are
+fixed. The script therefore:
+
+1. Generates 16 geometrically spaced slopes from `0.25` through `3.0`.
+2. Rounds the slopes, inputs, and hidden products to FP16 to model the shader's
+  hidden-layer arithmetic.
+3. Evaluates the 16 `tanh` features over evenly spaced training inputs.
+4. Solves a ridge-regression system for the FP32 output weights.
+5. Validates the fit on the same 257-point grid used by the C++ sample.
+6. Prints `kSlopes` and `kOutputWeights` declarations ready for C++.
+
+The output bias remains zero because `sin`, `tanh`, and the fixed hidden
+features are odd functions on the symmetric training interval.
+
+Create an isolated environment and install the dependency from the repository
+root:
+
+```powershell
+py -3 -m venv .venv
+./.venv/Scripts/python.exe -m pip install -r sin-network/requirements.txt
+```
+
+Run the trainer with its reproducible defaults:
+
+```powershell
+./.venv/Scripts/python.exe sin-network/train.py
+```
+
+The default fit uses 16,385 training points and an L2 regularization strength
+of `1e-5`. It reports approximately `0.00217` maximum error and `0.000784` RMS
+error under the script's shader-like FP16 model. GPU results can differ slightly
+because the script approximates the shader's arithmetic rather than executing
+the HLSL operation.
+
+To use the generated parameters:
+
+1. Replace the `kSlopes` and `kOutputWeights` declarations in
+  [`sin-network.cpp`](sin-network.cpp) with the declarations printed by the
+  script.
+2. Rebuild and run the native sample with the commands in [Build and
+  run](#build-and-run).
+3. Check the native maximum and RMS errors. The native run is the authoritative
+  validation because it executes the deployed HLSL path.
+
+Use `--help` to list tuning options:
+
+```powershell
+./.venv/Scripts/python.exe sin-network/train.py --help
+```
+
+Increasing `--training-samples` makes the fit cover the interval more densely.
+Increasing `--ridge` reduces coefficient magnitude but may increase error. Keep
+the hidden count at 16 unless you also update the matrix dimensions, buffer
+layout, loops, and constants in both C++ and HLSL.
 
 ## 1. Start with the network equation
 
