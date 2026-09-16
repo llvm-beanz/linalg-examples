@@ -11,16 +11,6 @@ compute setup or the HLSL linear-algebra API. After completing it, you should be
 able to trace every resource from its C++ allocation to its HLSL use and explain
 the complete execution flow.
 
-## Contents
-
-- [Build and run](#build-and-run)
-- [Train replacement parameters](#train-replacement-parameters)
-- [Network and resource layout](#1-start-with-the-network-equation)
-- [Preview runtime and shader compilation](#3-select-the-preview-d3d12-runtime)
-- [Device setup and dispatch](#5-create-a-device-that-can-run-the-shader)
-- [Result validation](#10-validate-the-approximation)
-- [Troubleshooting](#troubleshooting)
-
 ## Tested dependency versions
 
 The sample uses preview Shader Model 6.10 linear-algebra APIs. Use this matching
