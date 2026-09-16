@@ -8,15 +8,15 @@ ByteAddressBuffer OutputWeights : register(t2);
 RWByteAddressBuffer Outputs : register(u0);
 
 using InputMatrix =
-    Matrix<ComponentType::F16, 4, 4, MatrixUse::A, MatrixScope::ThreadGroup>;
+    Matrix<ComponentType::F16, 8, 8, MatrixUse::A, MatrixScope::ThreadGroup>;
 using HiddenWeightMatrix =
-    Matrix<ComponentType::F16, 4, 4, MatrixUse::B, MatrixScope::ThreadGroup>;
+    Matrix<ComponentType::F16, 8, 8, MatrixUse::B, MatrixScope::ThreadGroup>;
 using HiddenActivationMatrix =
-    Matrix<ComponentType::F16, 4, 4, MatrixUse::A, MatrixScope::ThreadGroup>;
+    Matrix<ComponentType::F16, 8, 8, MatrixUse::A, MatrixScope::ThreadGroup>;
 using OutputWeightMatrix =
-    Matrix<ComponentType::F16, 4, 4, MatrixUse::B, MatrixScope::ThreadGroup>;
+    Matrix<ComponentType::F16, 8, 8, MatrixUse::B, MatrixScope::ThreadGroup>;
 using AccumulatorMatrix =
-    Matrix<ComponentType::F16, 4, 4, MatrixUse::Accumulator, MatrixScope::ThreadGroup>;
+    Matrix<ComponentType::F16, 8, 8, MatrixUse::Accumulator, MatrixScope::ThreadGroup>;
 
 float Sigmoid(float value)
 {
@@ -27,9 +27,9 @@ float Sigmoid(float value)
 void main()
 {
     InputMatrix inputs = InputMatrix::Load(
-        Inputs, 0, 8, MatrixLayout::RowMajor);
+        Inputs, 0, 16, MatrixLayout::RowMajor);
     HiddenWeightMatrix hiddenWeights = HiddenWeightMatrix::Load(
-        HiddenWeights, 0, 8, MatrixLayout::RowMajor);
+        HiddenWeights, 0, 16, MatrixLayout::RowMajor);
     AccumulatorMatrix hidden = Multiply(inputs, hiddenWeights);
 
     for (uint element = 0; element < hidden.Length(); ++element)
@@ -38,7 +38,7 @@ void main()
     HiddenActivationMatrix activations =
         hidden.Cast<ComponentType::F16, MatrixUse::A>();
     OutputWeightMatrix outputWeights = OutputWeightMatrix::Load(
-        OutputWeights, 0, 8, MatrixLayout::RowMajor);
+        OutputWeights, 0, 16, MatrixLayout::RowMajor);
     AccumulatorMatrix logits = Multiply(activations, outputWeights);
 
     for (uint element = 0; element < logits.Length(); ++element)
@@ -48,5 +48,5 @@ void main()
         logits.Set(element, (half)Sigmoid(logits.Get(element) + bias));
     }
 
-    logits.Store(Outputs, 0, 8, MatrixLayout::RowMajor);
+    logits.Store(Outputs, 0, 16, MatrixLayout::RowMajor);
 }

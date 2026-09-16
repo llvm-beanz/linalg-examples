@@ -9,6 +9,7 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <iomanip>
@@ -32,10 +33,12 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 constexpr UINT kInputCount = 4;
-constexpr UINT kMatrixDimension = 4;
+constexpr UINT kNetworkDimension = 4;
+constexpr UINT kMatrixDimension = 8;
 constexpr UINT64 kHalfMatrixSize =
   kMatrixDimension * kMatrixDimension * sizeof(uint16_t);
 constexpr UINT64 kOutputBufferSize = kHalfMatrixSize;
+constexpr float kResultTolerance = 0.001f;
 
 struct Input {
   float x;
@@ -46,12 +49,12 @@ constexpr std::array<Input, kInputCount> kInputs = {
     Input{0.0f, 0.0f}, Input{0.0f, 1.0f}, Input{1.0f, 0.0f},
     Input{1.0f, 1.0f}};
 constexpr std::array<UINT, kInputCount> kExpected = {0, 1, 1, 0};
-constexpr std::array<std::array<float, 4>, kMatrixDimension> kHiddenWeights = {
+constexpr std::array<std::array<float, 4>, kNetworkDimension> kHiddenWeights = {
     std::array<float, 4>{20.0f, 20.0f, 0.0f, 0.0f},
     std::array<float, 4>{20.0f, 20.0f, 0.0f, 0.0f},
     std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f},
   std::array<float, 4>{-10.0f, -30.0f, 0.0f, 0.0f}};
-constexpr std::array<std::array<float, 4>, kMatrixDimension> kOutputWeights = {
+constexpr std::array<std::array<float, 4>, kNetworkDimension> kOutputWeights = {
   std::array<float, 4>{20.0f, 0.0f, 0.0f, 0.0f},
   std::array<float, 4>{-20.0f, 0.0f, 0.0f, 0.0f},
   std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f},
@@ -201,7 +204,7 @@ ComPtr<ID3D12Device> CreateWarpDevice() {
   Check(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_12_0,
                           IID_PPV_ARGS(&device)),
         "Create WARP device");
-  std::cout << "Using WARP for deterministic threadgroup matrix support.\n";
+  std::cout << "Using WARP for deterministic matrix support.\n";
   return device;
 }
 
@@ -217,24 +220,51 @@ void ReportLinearAlgebraSupport(ID3D12Device *device) {
   D3D12_FEATURE_DATA_LINEAR_ALGEBRA_MATRIX_OPERATION_SUPPORT operation{};
   operation.OperationType =
       D3D12_LINEAR_ALGEBRA_OPERATION_TYPE_THREADGROUP_MATRIX_MULTIPLY;
-    auto &threadGroup = operation.ThreadGroupMatrixMultiply;
-    threadGroup.WaveInputs.WaveSize = 4;
-    threadGroup.WaveInputs.MatrixAComponentType =
+  auto &threadGroup = operation.ThreadGroupMatrixMultiply;
+  threadGroup.WaveInputs.WaveSize = 4;
+  threadGroup.WaveInputs.MatrixAComponentType =
       D3D12_LINEAR_ALGEBRA_DATATYPE_FLOAT16;
-    threadGroup.WaveInputs.MatrixBComponentType =
+  threadGroup.WaveInputs.MatrixBComponentType =
       D3D12_LINEAR_ALGEBRA_DATATYPE_FLOAT16;
-    threadGroup.WaveInputs.AccumulatorComponentType =
+  threadGroup.WaveInputs.AccumulatorComponentType =
       D3D12_LINEAR_ALGEBRA_DATATYPE_FLOAT16;
-    threadGroup.Shape = {kMatrixDimension, kMatrixDimension, kMatrixDimension};
+  threadGroup.Shape = {8, 8, 8};
   Check(device->CheckFeatureSupport(
             D3D12_FEATURE_LINEAR_ALGEBRA_LINEAR_ALGEBRA_MATRIX_OPERATION_SUPPORT,
             &operation, sizeof(operation)),
-      "Query FP16 threadgroup matrix-matrix support");
-    if ((threadGroup.SupportFlags &
+        "Query FP16 threadgroup matrix-matrix support");
+  if ((threadGroup.SupportFlags &
        D3D12_LINEAR_ALGEBRA_MULTIPLICATION_SUPPORT_FLAG_SUPPORTED) == 0)
     throw std::runtime_error(
-      "FP16 threadgroup matrix-matrix Multiply is not supported");
-    std::cout << "Linear algebra tier 1 and FP16 threadgroup Multiply are supported.\n";
+        "FP16 threadgroup matrix-matrix Multiply is not supported");
+
+  operation = {};
+  operation.OperationType =
+      D3D12_LINEAR_ALGEBRA_OPERATION_TYPE_WAVE_MATRIX_MULTIPLY;
+  auto &wave = operation.WaveMatrixMultiply;
+  wave.Inputs.WaveSize = 4;
+  wave.Inputs.MatrixAComponentType = D3D12_LINEAR_ALGEBRA_DATATYPE_FLOAT16;
+  wave.Inputs.MatrixBComponentType = D3D12_LINEAR_ALGEBRA_DATATYPE_FLOAT16;
+  wave.Inputs.AccumulatorComponentType = D3D12_LINEAR_ALGEBRA_DATATYPE_FLOAT16;
+  std::array<D3D12_LINEAR_ALGEBRA_MATRIX_MULTIPLY_SHAPE, 64> shapes{};
+  wave.NumShapes = static_cast<UINT>(shapes.size());
+  wave.Shapes = shapes.data();
+  Check(device->CheckFeatureSupport(
+            D3D12_FEATURE_LINEAR_ALGEBRA_LINEAR_ALGEBRA_MATRIX_OPERATION_SUPPORT,
+            &operation, sizeof(operation)),
+        "Query FP16 wave matrix-matrix support");
+  if ((wave.SupportFlags &
+       D3D12_LINEAR_ALGEBRA_MULTIPLICATION_SUPPORT_FLAG_SUPPORTED) == 0)
+    throw std::runtime_error("FP16 wave matrix-matrix Multiply is not supported");
+  bool tileShapeSupported = false;
+  for (UINT index = 0; index < wave.NumShapes; ++index) {
+    const auto &shape = shapes[index];
+    tileShapeSupported |= shape.M == 4 && shape.K == 4 && shape.N == 4;
+  }
+  if (!tileShapeSupported)
+    throw std::runtime_error("The 4 x 4 x 4 wave multiply shape is not supported");
+
+  std::cout << "FP16 8 x 8 threadgroup and 4 x 4 wave Multiply are supported.\n";
 #else
   (void)device;
   std::cout << "Built without D3D12 preview headers; capability query skipped.\n";
@@ -274,9 +304,12 @@ void WaitForGpu(ID3D12CommandQueue *queue, ID3D12Fence *fence, HANDLE event) {
 } // namespace
 
 int wmain(int argc, wchar_t **argv) try {
-  const std::filesystem::path shaderPath =
+  const std::filesystem::path threadGroupShaderPath =
       argc > 1 ? argv[1] : std::filesystem::path(L"xor-network.hlsl");
-  auto shader = CompileShader(shaderPath);
+  const std::filesystem::path waveShaderPath =
+      argc > 2 ? argv[2] : std::filesystem::path(L"xor-network-wave.hlsl");
+  auto threadGroupShader = CompileShader(threadGroupShaderPath);
+  auto waveShader = CompileShader(waveShaderPath);
   auto device = CreateWarpDevice();
   ReportLinearAlgebraSupport(device.Get());
 
@@ -284,30 +317,40 @@ int wmain(int argc, wchar_t **argv) try {
   std::array<uint16_t, kMatrixDimension * kMatrixDimension> hiddenWeights{};
   std::array<uint16_t, kMatrixDimension * kMatrixDimension> outputWeights{};
   for (UINT row = 0; row < kMatrixDimension; ++row) {
-    inputs[row * kMatrixDimension] = FloatToHalf(kInputs[row].x);
-    inputs[row * kMatrixDimension + 1] = FloatToHalf(kInputs[row].y);
-    inputs[row * kMatrixDimension + 3] = FloatToHalf(1.0f);
+    if (row < kInputCount) {
+      inputs[row * kMatrixDimension] = FloatToHalf(kInputs[row].x);
+      inputs[row * kMatrixDimension + 1] = FloatToHalf(kInputs[row].y);
+      inputs[row * kMatrixDimension + 3] = FloatToHalf(1.0f);
+    }
     for (UINT column = 0; column < kMatrixDimension; ++column) {
-      hiddenWeights[row * kMatrixDimension + column] =
-          FloatToHalf(kHiddenWeights[row][column]);
-      outputWeights[row * kMatrixDimension + column] =
-          FloatToHalf(kOutputWeights[row][column]);
+      if (row < kNetworkDimension && column < kNetworkDimension) {
+        hiddenWeights[row * kMatrixDimension + column] =
+            FloatToHalf(kHiddenWeights[row][column]);
+        outputWeights[row * kMatrixDimension + column] =
+            FloatToHalf(kOutputWeights[row][column]);
+      }
     }
   }
 
   auto inputBuffer = CreateUploadBuffer(device.Get(), inputs);
   auto hiddenBuffer = CreateUploadBuffer(device.Get(), hiddenWeights);
   auto outputWeightBuffer = CreateUploadBuffer(device.Get(), outputWeights);
-  auto outputBuffer = CreateBuffer(
+    auto threadGroupOutputBuffer = CreateBuffer(
       device.Get(), kOutputBufferSize, D3D12_HEAP_TYPE_DEFAULT,
       D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-  auto readback = CreateBuffer(device.Get(), kOutputBufferSize,
-                               D3D12_HEAP_TYPE_READBACK,
-                               D3D12_RESOURCE_STATE_COPY_DEST);
+    auto waveOutputBuffer = CreateBuffer(
+      device.Get(), kOutputBufferSize, D3D12_HEAP_TYPE_DEFAULT,
+      D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    auto threadGroupReadback =
+      CreateBuffer(device.Get(), kOutputBufferSize, D3D12_HEAP_TYPE_READBACK,
+             D3D12_RESOURCE_STATE_COPY_DEST);
+    auto waveReadback =
+      CreateBuffer(device.Get(), kOutputBufferSize, D3D12_HEAP_TYPE_READBACK,
+             D3D12_RESOURCE_STATE_COPY_DEST);
 
   D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
   heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  heapDesc.NumDescriptors = 4;
+  heapDesc.NumDescriptors = 8;
   heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ComPtr<ID3D12DescriptorHeap> descriptors;
   Check(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptors)),
@@ -322,27 +365,39 @@ int wmain(int argc, wchar_t **argv) try {
   rawSrv.Format = DXGI_FORMAT_R32_TYPELESS;
   rawSrv.Buffer.NumElements = static_cast<UINT>(kHalfMatrixSize / 4);
   rawSrv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
-  device->CreateShaderResourceView(inputBuffer.Get(), &rawSrv, cpu);
-  cpu.ptr += descriptorSize;
-  device->CreateShaderResourceView(hiddenBuffer.Get(), &rawSrv, cpu);
-  cpu.ptr += descriptorSize;
-  device->CreateShaderResourceView(outputWeightBuffer.Get(), &rawSrv, cpu);
-  cpu.ptr += descriptorSize;
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
   uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
   uav.Format = DXGI_FORMAT_R32_TYPELESS;
   uav.Buffer.NumElements = static_cast<UINT>(kOutputBufferSize / 4);
   uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
-  device->CreateUnorderedAccessView(outputBuffer.Get(), nullptr, &uav, cpu);
+  auto writeDescriptorTable = [&](ID3D12Resource *outputBuffer) {
+    device->CreateShaderResourceView(inputBuffer.Get(), &rawSrv, cpu);
+    cpu.ptr += descriptorSize;
+    device->CreateShaderResourceView(hiddenBuffer.Get(), &rawSrv, cpu);
+    cpu.ptr += descriptorSize;
+    device->CreateShaderResourceView(outputWeightBuffer.Get(), &rawSrv, cpu);
+    cpu.ptr += descriptorSize;
+    device->CreateUnorderedAccessView(outputBuffer, nullptr, &uav, cpu);
+    cpu.ptr += descriptorSize;
+  };
+  writeDescriptorTable(threadGroupOutputBuffer.Get());
+  writeDescriptorTable(waveOutputBuffer.Get());
 
   auto rootSignature = CreateRootSignature(device.Get());
   D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{};
   psoDesc.pRootSignature = rootSignature.Get();
-  psoDesc.CS = {shader->GetBufferPointer(), shader->GetBufferSize()};
-  ComPtr<ID3D12PipelineState> pipeline;
-  Check(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&pipeline)),
-        "Create compute pipeline");
+  psoDesc.CS = {threadGroupShader->GetBufferPointer(),
+                threadGroupShader->GetBufferSize()};
+    ComPtr<ID3D12PipelineState> threadGroupPipeline;
+    Check(device->CreateComputePipelineState(
+      &psoDesc, IID_PPV_ARGS(&threadGroupPipeline)),
+      "Create threadgroup compute pipeline");
+    psoDesc.CS = {waveShader->GetBufferPointer(), waveShader->GetBufferSize()};
+    ComPtr<ID3D12PipelineState> wavePipeline;
+    Check(device->CreateComputePipelineState(&psoDesc,
+                  IID_PPV_ARGS(&wavePipeline)),
+      "Create wave compute pipeline");
 
   D3D12_COMMAND_QUEUE_DESC queueDesc{};
   ComPtr<ID3D12CommandQueue> queue;
@@ -354,28 +409,40 @@ int wmain(int argc, wchar_t **argv) try {
         "Create command allocator");
   ComPtr<ID3D12GraphicsCommandList> commands;
   Check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                  allocator.Get(), pipeline.Get(),
+                                  allocator.Get(), threadGroupPipeline.Get(),
                                   IID_PPV_ARGS(&commands)),
         "Create command list");
 
-  D3D12_RESOURCE_BARRIER barrier{};
-  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-  barrier.Transition.pResource = outputBuffer.Get();
-  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  commands->ResourceBarrier(1, &barrier);
+  D3D12_RESOURCE_BARRIER barriers[2]{};
+  barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barriers[0].Transition.pResource = threadGroupOutputBuffer.Get();
+  barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+  barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  barriers[1] = barriers[0];
+  barriers[1].Transition.pResource = waveOutputBuffer.Get();
+  commands->ResourceBarrier(2, barriers);
   ID3D12DescriptorHeap *heaps[] = {descriptors.Get()};
   commands->SetDescriptorHeaps(1, heaps);
   commands->SetComputeRootSignature(rootSignature.Get());
-  commands->SetComputeRootDescriptorTable(
-      0, descriptors->GetGPUDescriptorHandleForHeapStart());
+  auto table = descriptors->GetGPUDescriptorHandleForHeapStart();
+  commands->SetComputeRootDescriptorTable(0, table);
   commands->Dispatch(1, 1, 1);
 
-  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-  commands->ResourceBarrier(1, &barrier);
-  commands->CopyResource(readback.Get(), outputBuffer.Get());
+  commands->SetPipelineState(wavePipeline.Get());
+  table.ptr += 4 * descriptorSize;
+  commands->SetComputeRootDescriptorTable(
+      0, table);
+  commands->Dispatch(2, 2, 1);
+
+  for (auto &barrier : barriers) {
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  }
+  commands->ResourceBarrier(2, barriers);
+  commands->CopyResource(threadGroupReadback.Get(),
+                         threadGroupOutputBuffer.Get());
+  commands->CopyResource(waveReadback.Get(), waveOutputBuffer.Get());
   Check(commands->Close(), "Close command list");
   ID3D12CommandList *lists[] = {commands.Get()};
   queue->ExecuteCommandLists(1, lists);
@@ -389,24 +456,47 @@ int wmain(int argc, wchar_t **argv) try {
   WaitForGpu(queue.Get(), fence.Get(), event);
   CloseHandle(event);
 
-  uint16_t *results = nullptr;
+  uint16_t *threadGroupResults = nullptr;
+  uint16_t *waveResults = nullptr;
   D3D12_RANGE readRange{0, kOutputBufferSize};
-  Check(readback->Map(0, &readRange, reinterpret_cast<void **>(&results)),
-        "Map readback buffer");
+  Check(threadGroupReadback->Map(
+            0, &readRange, reinterpret_cast<void **>(&threadGroupResults)),
+        "Map threadgroup readback buffer");
+  Check(waveReadback->Map(0, &readRange,
+                          reinterpret_cast<void **>(&waveResults)),
+        "Map wave readback buffer");
   bool passed = true;
+  float maxDifference = 0.0f;
+  for (UINT index = 0; index < kMatrixDimension * kMatrixDimension; ++index) {
+    float threadGroupValue = HalfToFloat(threadGroupResults[index]);
+    float waveValue = HalfToFloat(waveResults[index]);
+    float difference = std::abs(threadGroupValue - waveValue);
+    maxDifference = std::max(maxDifference, difference);
+    passed &= std::isfinite(threadGroupValue) && std::isfinite(waveValue) &&
+              difference <= kResultTolerance;
+  }
   std::cout << std::fixed << std::setprecision(6);
   for (UINT index = 0; index < kInputCount; ++index) {
-    float probability = HalfToFloat(results[index * kMatrixDimension]);
-    UINT predicted = probability >= 0.5f ? 1 : 0;
-    passed &= predicted == kExpected[index];
+    float threadGroupProbability =
+        HalfToFloat(threadGroupResults[index * kMatrixDimension]);
+    float waveProbability = HalfToFloat(waveResults[index * kMatrixDimension]);
+    UINT threadGroupPrediction = threadGroupProbability >= 0.5f ? 1 : 0;
+    UINT wavePrediction = waveProbability >= 0.5f ? 1 : 0;
+    passed &= threadGroupPrediction == kExpected[index] &&
+              wavePrediction == kExpected[index];
     std::cout << static_cast<UINT>(kInputs[index].x) << " XOR "
-              << static_cast<UINT>(kInputs[index].y) << " = " << predicted
-              << " (probability " << probability << ")\n";
+              << static_cast<UINT>(kInputs[index].y)
+              << ": threadgroup = " << threadGroupPrediction << " ("
+              << threadGroupProbability << "), wave = " << wavePrediction
+              << " (" << waveProbability << ")\n";
   }
-  readback->Unmap(0, nullptr);
+  threadGroupReadback->Unmap(0, nullptr);
+  waveReadback->Unmap(0, nullptr);
+  std::cout << "Maximum implementation difference: " << maxDifference << "\n";
   if (!passed)
-    throw std::runtime_error("XOR classification failed");
-  std::cout << "All XOR cases classified correctly.\n";
+    throw std::runtime_error("XOR implementation comparison failed");
+  std::cout << "Both implementations classified XOR correctly and agree within "
+            << kResultTolerance << ".\n";
   return 0;
 } catch (const std::exception &error) {
   std::cerr << "error: " << error.what() << '\n';

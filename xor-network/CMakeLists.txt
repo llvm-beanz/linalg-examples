@@ -107,5 +107,8 @@ add_custom_command(TARGET xor-network POST_BUILD
     "${CMAKE_CURRENT_SOURCE_DIR}/xor-network.hlsl"
     "$<TARGET_FILE_DIR:xor-network>"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/xor-network-wave.hlsl"
+    "$<TARGET_FILE_DIR:xor-network>"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${DXC_NATIVE_ROOT}/include/hlsl/dx/linalg.h"
     "$<TARGET_FILE_DIR:xor-network>/dx")

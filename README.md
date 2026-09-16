@@ -53,8 +53,8 @@ This repository demonstrates different approaches based on feature availability:
   the C++ host, HLSL shader, resource layout, and dispatch flow.
 - **[xor-network](xor-network/README.md)**: a complete native D3D12 sample that
   classifies the four XOR inputs as one batch with a `2 -> 4 -> 1` network,
-  FP16 threadgroup matrix-matrix multiplication, matrix conversion and storage,
-  and sigmoid activations.
+  compares FP16 threadgroup matrix multiplication with a wave-tiled GEMM
+  implementation, and verifies both output matrices agree.
 
 ## Matrix Dimensions
 
