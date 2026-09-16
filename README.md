@@ -47,15 +47,20 @@ This repository demonstrates different approaches based on feature availability:
 - **[gemm.hlsl](gemm.hlsl)**: Basic tiling with shared memory tiles to improve cache locality
 - **[linalg-wave.hlsl](linalg-wave.hlsl)**: Hardware-accelerated manually tiled using `Wave`-scope `linalg::Matrix` objects
 - **[linalg-threadgroup.hlsl](linalg-threadgroup.hlsl)**: Hardware-accelerated driver tiled using `ThreadGroup`-scope `linalg::Matrix` objects
+- **[sin-network](sin-network/README.md)**: a complete native D3D12 sample that
+  approximates `sin(x)` with a 16-neuron network and thread-scope matrix-vector
+  multiplication. Its README contains build instructions and a walkthrough of
+  the C++ host, HLSL shader, resource layout, and dispatch flow.
 
 ## Matrix Dimensions
 
-All implementations support configurable M, N, and K dimensions:
+The GEMM shader examples support configurable M, N, and K dimensions:
 - **M**: Number of rows in matrix A and C
 - **N**: Number of columns in matrix B and C  
 - **K**: Number of columns in matrix A and rows in matrix B
 
-To modify matrix sizes, edit the `#define` statements at the top of each shader file:
+To modify matrix sizes, edit the `#define` statements at the top of the relevant
+shader file:
 
 ```hlsl
 #define M 2048    // Rows in A and C
