@@ -51,6 +51,10 @@ This repository demonstrates different approaches based on feature availability:
   approximates `sin(x)` with a 16-neuron network and thread-scope matrix-vector
   multiplication. Its README contains build instructions and a walkthrough of
   the C++ host, HLSL shader, resource layout, and dispatch flow.
+- **[xor-network](xor-network/README.md)**: a complete native D3D12 sample that
+  classifies the four XOR inputs as one batch with a `2 -> 4 -> 1` network,
+  FP16 threadgroup matrix-matrix multiplication, matrix conversion and storage,
+  and sigmoid activations.
 
 ## Matrix Dimensions
 
